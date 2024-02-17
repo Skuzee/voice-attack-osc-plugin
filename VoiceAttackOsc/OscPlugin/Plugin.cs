@@ -8,14 +8,35 @@ using System.Reflection;
 using System.Threading.Tasks;
 using System.Net;
 
+// My Notes:
+// adding an unknown address to the current dictionary seems incorrect. I need a way to differentate between a command
+// and a varible/data being sent
+// I think a secondary dictionary to save address and last known data would work.
+// If the address is not linked to a certain command (and value combo) then the address's data is saved.
+// Later, when the message is SENT, if the ADD/SUB option is chosen, then we add the adjustment to the last known value.
+
 namespace VAOscPlugin
 {
 
     public class VoiceAttackPlugin
     {
+        public struct DataPair
+        {
+            public string command;
+            public int value;
+
+            public DataPair(string setCommand, int setValue)
+            {
+                command = setCommand;
+                value = setValue;
+            }
+        }
 
         const string C_APP_NAME = "Lerk's Osc Plugin";
         const string C_APP_VERSION = "v0.2";
+
+        public static Dictionary<string, string> commandDict = new Dictionary<string, string>();
+        public static Dictionary<string, string> lastKnownValuesDict = new Dictionary<string, string>();
 
         private static OscReceiver _receiver;
         private static Task _receiverTask;
@@ -40,12 +61,12 @@ namespace VAOscPlugin
 
         public static string VA_DisplayInfo()
         {
-            return $"{C_APP_NAME} allows VoiceAttack to send and receive OSC messages";  
+            return $"{C_APP_NAME} allows VoiceAttack to send and receive OSC messages";
         }
 
         public static Guid VA_Id()
         {
-            return new Guid("{874C92BC-1426-4EA6-9156-F24161796CB8}");  
+            return new Guid("{874C92BC-1426-4EA6-9156-F24161796CB8}");
         }
 
         public static void VA_StopCommand()
@@ -58,18 +79,18 @@ namespace VAOscPlugin
             string settingsPath = Path.Combine(AssemblyDirectory, "oscsettings.txt");
             vaProxy.WriteToLog("Loading mappings from: " + settingsPath, "black");
 
-            var commandDict = new Dictionary<string, string>();
+
 
             string line;
             // Read the file and display it line by line.  
-            using (StreamReader file = new StreamReader(settingsPath)) {
+            using (StreamReader file = new StreamReader(settingsPath))
+            {
                 while ((line = file.ReadLine()) != null)
                 {
                     if (!line.Contains(';')) continue;
                     var oscCommandSplit = line.Split(';');
                     var oscAddress = oscCommandSplit[0];
-                    var vaCommand = line.Substring(oscCommandSplit[0].Length+1);
-                    commandDict.Add(oscAddress, vaCommand);
+                    var vaCommand = line.Substring(oscCommandSplit[0].Length + 1);
                     vaProxy.WriteToLog("Mapping " + oscAddress + " to " + vaCommand);
                 }
             };
@@ -98,14 +119,21 @@ namespace VAOscPlugin
                             // this will block until one arrives or the socket is closed
                             OscPacket packet = _receiver.Receive();
                             var message = (OscMessage)packet;
+                            String messageData = message.ToString().Split(' ')[1];
+
+
+
+                            UpdateAdd(message.Address, messageData);
+
                             if (commandDict.ContainsKey(message.Address))
                             {
+                                // retrieve the command from dictionary
                                 vaProxy.Command.Execute(commandDict[message.Address]);
                             }
-                            else
-                            {
-                                vaProxy.WriteToLog($"OSC address not found in config: {message.Address}", "red");
-                            }
+
+                            // add or update value in dictionary
+                            if (!UpdateAdd(message.Address, messageData))
+                                vaProxy.WriteToLog($"NEW Address: {message.Address} Value: {messageData}", "yellow");
                         }
                     }
                 }
@@ -162,38 +190,169 @@ namespace VAOscPlugin
 
                 if (fullOscCommand.Contains(':'))
                 {
-                    oscArgStrings = fullOscCommand.Contains(';') 
-                        ? fullOscCommand.Split(':')[1].Split(';') 
+                    oscArgStrings = fullOscCommand.Contains(';')
+                        ? fullOscCommand.Split(':')[1].Split(';')
                         : (new string[] { fullOscCommand.Split(':')[1] });
 
                     foreach (string oscArgument in oscArgStrings)
                     {
                         if (oscArgument != null && (
-                            oscArgument.StartsWith("i ", StringComparison.OrdinalIgnoreCase) || 
-                            oscArgument.StartsWith("f ", StringComparison.OrdinalIgnoreCase) || 
-                            oscArgument.StartsWith("b ", StringComparison.OrdinalIgnoreCase) || 
-                            oscArgument.StartsWith("s ", StringComparison.OrdinalIgnoreCase)))
-                        switch (oscArgument.Substring(0, 1))
+                            oscArgument.StartsWith("i", StringComparison.OrdinalIgnoreCase) ||
+                            oscArgument.StartsWith("f", StringComparison.OrdinalIgnoreCase) ||
+                            oscArgument.StartsWith("b", StringComparison.OrdinalIgnoreCase) ||
+                            oscArgument.StartsWith("s", StringComparison.OrdinalIgnoreCase)))
                         {
-                            case "i":
-                                int intValue;
-                                if (int.TryParse(oscArgument.Substring(2), out intValue))
-                                    oscArgList.Add(intValue);
-                                break;
-                            case "f":
-                                float floatValue;
-                                if (float.TryParse(oscArgument.Substring(2), out floatValue))
-                                    oscArgList.Add(floatValue);
-                                break;
-                            case "b":
-                                bool boolValue;
-                                if (bool.TryParse(oscArgument.Substring(2), out boolValue))
-                                    oscArgList.Add(boolValue);
-                                break;
-                            case "s":
-                                if (!string.IsNullOrEmpty(oscArgument.Substring(2)))
-                                    oscArgList.Add(oscArgument.Substring(2));
-                                break;
+
+                            // look to see if the value has been previously stored
+                            // parse the value as the correct data type
+                            // if no previous value was found, use a default value 0
+                            // should I add a config file for setting default values of parameters?
+
+                            int intValue = 0;
+                            float floatValue = 0;
+                            bool boolValue = false;
+
+                            int intCurrent = 0;
+                            float floatCurrent = 0;
+                            bool boolCurrent = false;
+
+                            switch (oscArgument.Substring(0, 2))
+                            {
+                                case "i ":
+                                    if (int.TryParse(oscArgument.Substring(2), out intValue))
+                                    {
+                                        UpdateAdd(oscAddress, intValue.ToString());
+                                        oscArgList.Add(intValue);
+                                    }
+                                    break;
+
+                                case "ia":
+                                    if (lastKnownValuesDict.ContainsKey(oscAddress))
+                                        int.TryParse(lastKnownValuesDict[oscAddress], out intCurrent);
+
+                                    if (int.TryParse(oscArgument.Substring(2), out intValue))
+                                    {
+                                        intCurrent += intValue;
+                                        UpdateAdd(oscAddress, intCurrent.ToString());
+                                        oscArgList.Add(intCurrent);
+                                    }
+                                    break;
+
+                                case "is":
+                                    if (lastKnownValuesDict.ContainsKey(oscAddress))
+                                        int.TryParse(lastKnownValuesDict[oscAddress], out intCurrent);
+
+                                    if (int.TryParse(oscArgument.Substring(2), out intValue))
+                                    {
+                                        intCurrent -= intValue;
+                                        UpdateAdd(oscAddress, intCurrent.ToString());
+                                        oscArgList.Add(intCurrent);
+                                    }
+                                    break;
+
+                                case "im":
+                                    if (lastKnownValuesDict.ContainsKey(oscAddress))
+                                        int.TryParse(lastKnownValuesDict[oscAddress], out intCurrent);
+
+                                    if (int.TryParse(oscArgument.Substring(2), out intValue))
+                                    {
+                                        intCurrent *= intValue;
+                                        UpdateAdd(oscAddress, intCurrent.ToString());
+                                        oscArgList.Add(intCurrent);
+                                    }
+                                    break;
+
+                                case "id":
+                                    if (lastKnownValuesDict.ContainsKey(oscAddress))
+                                        int.TryParse(lastKnownValuesDict[oscAddress], out intCurrent);
+
+                                    if (int.TryParse(oscArgument.Substring(2), out intValue))
+                                    {
+                                        intCurrent /= intValue;
+                                        UpdateAdd(oscAddress, intCurrent.ToString());
+                                        oscArgList.Add(intCurrent);
+                                    }
+                                    break;
+
+                                case "f ":
+                                    if (float.TryParse(oscArgument.Substring(2).TrimEnd('f'), out floatValue))
+                                    {
+                                        UpdateAdd(oscAddress, floatValue.ToString());
+                                        oscArgList.Add(floatValue);
+                                    }
+                                    break;
+
+                                case "fa":
+                                    if (lastKnownValuesDict.ContainsKey(oscAddress))
+                                        float.TryParse(lastKnownValuesDict[oscAddress].TrimEnd('f'), out floatCurrent);
+
+                                    if (float.TryParse(oscArgument.Substring(2), out floatValue))
+                                    {
+                                        floatCurrent += floatValue;
+                                        UpdateAdd(oscAddress, floatCurrent.ToString());
+                                        oscArgList.Add(floatCurrent);
+                                    }
+                                    break;
+
+                                case "fs":
+                                    if (lastKnownValuesDict.ContainsKey(oscAddress))
+                                        float.TryParse(lastKnownValuesDict[oscAddress].TrimEnd('f'), out floatCurrent);
+
+                                    if (float.TryParse(oscArgument.Substring(2), out floatValue))
+                                    {
+                                        floatCurrent -= floatValue;
+                                        UpdateAdd(oscAddress, floatCurrent.ToString());
+                                        oscArgList.Add(floatCurrent);
+                                    }
+                                    break;
+
+                                case "fm":
+                                    if (lastKnownValuesDict.ContainsKey(oscAddress))
+                                        float.TryParse(lastKnownValuesDict[oscAddress].TrimEnd('f'), out floatCurrent);
+
+                                    if (float.TryParse(oscArgument.Substring(2), out floatValue))
+                                    {
+                                        floatCurrent *= floatValue;
+                                        UpdateAdd(oscAddress, floatCurrent.ToString());
+                                        oscArgList.Add(floatCurrent);
+                                    }
+                                    break;
+
+                                case "fd":
+                                    if (lastKnownValuesDict.ContainsKey(oscAddress))
+                                        float.TryParse(lastKnownValuesDict[oscAddress].TrimEnd('f'), out floatCurrent);
+
+                                    if (float.TryParse(oscArgument.Substring(2), out floatValue))
+                                    {
+                                        floatCurrent /= floatValue;
+                                        UpdateAdd(oscAddress, floatCurrent.ToString());
+                                        oscArgList.Add(floatCurrent);
+                                    }
+                                    break;
+
+                                case "b ":
+                                    if (bool.TryParse(oscArgument.Substring(2), out boolValue))
+                                    {
+                                        UpdateAdd(oscAddress, boolValue.ToString());
+                                        oscArgList.Add(boolValue);
+                                    }
+                                    break;
+
+                                case "bn":
+                                    if (lastKnownValuesDict.ContainsKey(oscAddress))
+                                        bool.TryParse(lastKnownValuesDict[oscAddress], out boolCurrent);
+
+                                    boolCurrent = !boolCurrent;
+                                    UpdateAdd(oscAddress, boolCurrent.ToString());
+                                    oscArgList.Add(boolCurrent);
+
+                                    break;
+
+                                case "s ":
+                                    if (!string.IsNullOrEmpty(oscArgument.Substring(2)))
+                                        oscArgList.Add(oscArgument.Substring(2));
+                                    break;
+                            }
                         }
                     }
                 }
@@ -204,12 +363,13 @@ namespace VAOscPlugin
                     if (oscArgList.Any())
                     {
                         sender.Send(new OscMessage(oscAddress, oscArgList.ToArray()));
-                    } else
+                    }
+                    else
                     {
                         sender.Send(new OscMessage(oscAddress));
-                    }                   
+                    }
                 }
-            } 
+            }
             catch (Exception ex)
             {
                 vaProxy.WriteToLog("Error sending OSC message: " + ex.ToString(), "red");
@@ -218,6 +378,21 @@ namespace VAOscPlugin
 
         }
 
+        public static bool UpdateAdd(string inputAddress, string inputData)
+        {
+            if (lastKnownValuesDict.ContainsKey(inputAddress))
+            {
+                // update value
+                lastKnownValuesDict[inputAddress] = inputData;
+                return true;
+            }
+            else
+            {
+                // add new entry
+                lastKnownValuesDict.Add(inputAddress, inputData);
+                return false;
+            }
+        }
     }
 
 }

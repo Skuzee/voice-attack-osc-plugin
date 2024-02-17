@@ -31,3 +31,29 @@ You can also send multiple params separated with a semicolon
 If you just want to trigger osc and not send any params, do not specify a param list
 
 `/chataigne/fx1on`
+
+
+# New Commands
+
+Replace the "Space following the type indicator with one of the following alternate commands.
+
+
+Int	(a)Add, (s)Subtract, (m)Multiply, (d)Divide
+Float	(a)Add, (s)Subtract, (m)Multiply, (d)Divide
+Bool	(n)Negate
+
+
+Sets int value to 4 (no change from previous version)
+`/avatar/parameters/name:i 4`
+
+Adds 4 to current int value
+`/avatar/parameters/name:ia4`
+
+Adds 0.1 to current float value
+`/avatar/parameters/name:fa0.1`
+
+Multiplies current int value by 2
+`/avatar/parameters/name:im2`
+
+Inverts bool value aka "toggle"
+`/avatar/parameters/name:bn`
